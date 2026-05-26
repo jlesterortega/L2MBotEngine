@@ -1,0 +1,17 @@
+# Ignore the large Vosk model folder
+vosk-model-small-en-us-0.15/
+
+# Python-specific files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files
+.env
+.venv
+env/
+venv/
+
+# Windows system files
+Thumbs.db
+Desktop.ini
