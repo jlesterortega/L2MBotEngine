@@ -88,8 +88,11 @@ class MacroExecutionWorker(QThread):
                 loop_count += 1
                 self.log_signal.emit(f"🔄 Processing Hit-Back Skill Matrix — Loop ({loop_count}/{self.max_loops})")
 
-                press_combo("ctrl", "space")
-                QThread.msleep(100)
+                for i in range(3):
+                    press_combo("ctrl", "space")
+                    if i < 2:  # 200ms delay between the 3 presses
+                        QThread.msleep(200)
+                # --- END OF MODIFIED ATTACK SEQUENCE ---
 
                 for i, step in enumerate(self.steps_data['steps']):
                     if self.stop_condition_check():
