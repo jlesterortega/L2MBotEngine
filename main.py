@@ -47,16 +47,14 @@ class MacroExecutionWorker(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
 
-    def __init__(self, steps_data, focus_callback, auto_record, record_duration, max_loops, stop_condition_check, autohunt_was_on=False, check_autohunt_callback=None):
+    def __init__(self, steps_data, focus_callback, auto_record, record_duration, max_loops, stop_condition_check):
         super().__init__()
         self.steps_data = steps_data
         self.focus_callback = focus_callback
         self.auto_record = auto_record
-        self.record_duration = record_duration
+        self.record_duration = record_duration # Make sure this is assigned
         self.max_loops = max_loops
         self.stop_condition_check = stop_condition_check
-        self.autohunt_was_on = autohunt_was_on          # skip F entirely if hunt was already ON
-        self.check_autohunt_callback = check_autohunt_callback  # callable for post-F re-check
 
     def run(self):
         try:
@@ -104,28 +102,8 @@ class MacroExecutionWorker(QThread):
 
                 QThread.msleep(50)
 
-            # ── AUTO HUNT RE-ENGAGEMENT WITH CONFIRM + RETRY ──
-            if self.autohunt_was_on:
-                # Hunt was already running before the sequence — no action needed
-                self.log_signal.emit("✅ Auto-Hunt was already ON before sequence — skipping F key press.")
-            else:
-                # Step 1: Press F to (re)enable Auto Hunt
-                self.log_signal.emit("⚔️ Closing Action: Pressing 'F' (Auto-Hunt Re-engagement)")
-                press_key("f", times=1)
-
-                # Step 2: If we have a pixel position, wait and confirm it actually turned ON
-                if self.check_autohunt_callback is not None:
-                    self.log_signal.emit("⏳ Waiting 800ms for Auto-Hunt button to settle...")
-                    QThread.msleep(800)
-
-                    still_off = not self.check_autohunt_callback()
-                    if still_off:
-                        self.log_signal.emit("🔁 Auto-Hunt still OFF after first F press — pressing F again...")
-                        press_key("f", times=1)
-                        self.log_signal.emit("✅ Second F press sent. Auto-Hunt re-engagement complete.")
-                    else:
-                        self.log_signal.emit("✅ Auto-Hunt confirmed ON after first F press.")
-
+            self.log_signal.emit("⚔️ Closing Action: Pressing 'F' (Auto-Hunt Re-engagement)")
+            press_key("f", times=1)
             self.log_signal.emit("✓ Action macro loop sequence complete.")
         except Exception as e:
             self.log_signal.emit(f"⚠️ Error executing macro sequence loop: {e}")
@@ -140,24 +118,26 @@ class L2MBotUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("L2M Bot — Lineage2M Guard Engine")
-        self.setMinimumSize(540, 980)  # slightly taller for new row
+        self.setMinimumSize(540, 940)
+        
         self.is_listening = False
         self.listener = None
         self.hp_monitor_worker = None
         self.macro_worker = None
         self.macro_lock = threading.Lock()
         self._is_currently_under_attack = False
+
         self.focus_click_x = 0
         self.focus_click_y = 0
         self.hp_check_x = 0
         self.hp_check_y = 0
-        self.autohunt_check_x = 0   # ← NEW
-        self.autohunt_check_y = 0   # ← NEW
         self._flash_state = False
+
         self.init_ui()
         self.parent_signal.connect(self.execute_trigger_sequence)
         self.hp_signal.connect(self.execute_hp_escape_sequence)
         self.load_configuration()
+        
         QTimer.singleShot(100, self.refresh_targets)
         self.append_log("🤖 L2M Bot Engine Interface Loaded successfully.")
 
@@ -197,12 +177,12 @@ class L2MBotUI(QMainWindow):
         title_lbl = QLabel("L2M Bot Engine")
         title_lbl.setObjectName("HeaderTitle")
         header_layout.addWidget(title_lbl)
-
+        
         self.status_alert_banner = QLabel("")
         self.status_alert_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_alert_banner.setStyleSheet("font-size: 14px; font-weight: bold; color: #ef4444; padding: 4px 12px;")
         header_layout.addWidget(self.status_alert_banner, 1)
-
+        
         self.btn_test_trigger = QPushButton("🎯 TEST TRIGGER")
         self.btn_test_trigger.setObjectName("SecondaryAction")
         self.btn_test_trigger.clicked.connect(self.execute_trigger_sequence)
@@ -212,12 +192,12 @@ class L2MBotUI(QMainWindow):
         self.flash_timer = QTimer()
         self.flash_timer.timeout.connect(self._handle_alert_flash_cycle)
 
-        # ── Audio Stream Configuration Card ──
+        # Audio Stream Configuration Card
         src_card = QFrame()
         src_card.setObjectName("Card")
         src_layout = QVBoxLayout(src_card)
         src_layout.setContentsMargins(12, 12, 12, 12)
-
+        
         lbl_sec1 = QLabel("AUDIO CAPTURE STREAM ENGINE")
         lbl_sec1.setObjectName("SectionTitle")
         src_layout.addWidget(lbl_sec1)
@@ -341,49 +321,7 @@ class L2MBotUI(QMainWindow):
         
         self.target_dropdowns_layout.addWidget(self.lbl_hp_key_title, 4, 0)
         self.target_dropdowns_layout.addWidget(hp_settings_container, 4, 1)
-
-        # ── NEW: Auto Hunt Button Position (row 5) ──
-        self.lbl_autohunt_title = QLabel("Auto Hunt Button Position:")
-        self.lbl_autohunt_title.setStyleSheet("font-weight: bold;")
-
-        self.lbl_autohunt_info = QLabel(" ⓘ ")
-        self.lbl_autohunt_info.setStyleSheet("color: #34d399; font-weight: bold; font-size: 14px;")
-        self.lbl_autohunt_info.setToolTip(
-            "Pick a pixel at the center of the Auto Hunt button.\n"
-            "Bot reads the color before each sequence:\n"
-            "  • GREEN  → Auto Hunt ON  → skip pressing F\n"
-            "  • OTHER  → Auto Hunt OFF → press F to re-enable"
-        )
-
-        self.lbl_autohunt_values = QLabel("Not Set (F key always pressed)")
-        self.lbl_autohunt_values.setStyleSheet("color: #6e6e82; font-family: 'Cascadia Code'; font-size: 12px;")
-
-        self.btn_pick_autohunt = QPushButton("🟢 Pick Position")
-        self.btn_pick_autohunt.setObjectName("SecondaryAction")
-        self.btn_pick_autohunt.clicked.connect(self.start_autohunt_picking_sequence)
-
-        self.btn_clear_autohunt = QPushButton("✕")
-        self.btn_clear_autohunt.setObjectName("SecondaryAction")
-        self.btn_clear_autohunt.setStyleSheet("color: #f87171; max-width: 30px;")
-        self.btn_clear_autohunt.clicked.connect(self.clear_autohunt_coordinates)
-
-        autohunt_actions_container = QWidget()
-        autohunt_actions_layout = QHBoxLayout(autohunt_actions_container)
-        autohunt_actions_layout.setContentsMargins(0, 0, 0, 0)
-        autohunt_actions_layout.addWidget(self.lbl_autohunt_values, 2)
-        autohunt_actions_layout.addWidget(self.btn_pick_autohunt, 1)
-        autohunt_actions_layout.addWidget(self.btn_clear_autohunt, 0)
-
-        autohunt_title_container = QWidget()
-        autohunt_title_layout = QHBoxLayout(autohunt_title_container)
-        autohunt_title_layout.setContentsMargins(0, 0, 0, 0)
-        autohunt_title_layout.addWidget(self.lbl_autohunt_title)
-        autohunt_title_layout.addWidget(self.lbl_autohunt_info)
-        autohunt_title_layout.addStretch()
-
-        self.target_dropdowns_layout.addWidget(autohunt_title_container, 5, 0)
-        self.target_dropdowns_layout.addWidget(autohunt_actions_container, 5, 1)
-
+        
         main_layout.addWidget(src_card)
 
         # Hit Back Steps Card Setup
@@ -430,34 +368,35 @@ class L2MBotUI(QMainWindow):
         macro_layout.addLayout(r1)
 
         self.macro_steps = []
-        standard_keys = ["none", "1", "2", "3", "4", "5", "Q", "E", "R", "T",
-                         "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"]
-
+        standard_keys = ["none", "1", "2", "3", "4", "5", "Q", "E", "R", "T", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"]
         for idx in range(5):
             r_step = QHBoxLayout()
             chk_en = QCheckBox(f"Step {idx+2}")
             chk_en.setChecked(True)
+            
             combo_k = QComboBox()
             combo_k.addItems(standard_keys)
+            
             lbl_d = QLabel("Delay (ms):")
             spin_d = QSpinBox()
             spin_d.setRange(0, 9999)
             spin_d.setSingleStep(100)
+            
             r_step.addWidget(chk_en, 1)
             r_step.addWidget(combo_k, 2)
             r_step.addStretch()
             r_step.addWidget(lbl_d)
             r_step.addWidget(spin_d, 2)
+            
             macro_layout.addLayout(r_step)
             self.macro_steps.append({"enabled": chk_en, "key": combo_k, "delay": spin_d})
 
-        # ── Final anchor label — now dynamic based on Auto Hunt state ──
         r_end = QHBoxLayout()
         lbl_fx2 = QLabel("🔒 Final Sequence Ending Anchor:")
-        self.lbl_anchor_val = QLabel("F Key (Auto-Hunt Lock) — checks pixel if set")
-        self.lbl_anchor_val.setStyleSheet("color: #34d399; font-weight: bold;")
+        lbl_val2 = QLabel("F Key (Auto-Hunt Lock)")
+        lbl_val2.setStyleSheet("color: #34d399; font-weight: bold;")
         r_end.addWidget(lbl_fx2)
-        r_end.addWidget(self.lbl_anchor_val)
+        r_end.addWidget(lbl_val2)
         r_end.addStretch()
         macro_layout.addLayout(r_end)
         main_layout.addWidget(macro_card)
@@ -475,7 +414,7 @@ class L2MBotUI(QMainWindow):
         extra_layout.addWidget(self.chk_auto_record)
         extra_layout.addWidget(lbl_rec_dur)
         extra_layout.addWidget(self.spin_rec_duration)
-        extra_layout.addWidget(self.chk_power_saver)
+        extra_layout.addWidget(self.chk_power_saver) # Now this will work
         main_layout.addLayout(extra_layout)
 
         self.btn_listen_toggle = QPushButton("▶ START LISTENING")
@@ -491,7 +430,6 @@ class L2MBotUI(QMainWindow):
         self.log_terminal.setReadOnly(True)
         main_layout.addWidget(self.log_terminal)
 
-    # ── Audio source toggle ──
     def on_audio_source_changed(self, index):
         if index == 0:
             self.combo_devices.setEnabled(True)
@@ -500,7 +438,6 @@ class L2MBotUI(QMainWindow):
             self.combo_devices.setEnabled(False)
             self.combo_processes.setEnabled(True)
 
-    # ── Focus coordinate picker ──
     def start_coordinate_picking_sequence(self):
         self.hide()
         QThread.msleep(250)
@@ -526,7 +463,6 @@ class L2MBotUI(QMainWindow):
         self.show()
         self.save_configuration()
 
-    # ── HP coordinate picker ──
     def start_hp_picking_sequence(self):
         self.hide()
         QThread.msleep(250)
@@ -552,78 +488,6 @@ class L2MBotUI(QMainWindow):
         self.show()
         self.save_configuration()
 
-    # ── NEW: Auto Hunt coordinate picker ──
-    def start_autohunt_picking_sequence(self):
-        self.hide()
-        QThread.msleep(250)
-        self.autohunt_overlay = CoordinatePickerOverlay()
-        self.autohunt_overlay.coordinates_picked.connect(self.on_autohunt_coordinates_captured)
-        self.autohunt_overlay.show()
-
-    def on_autohunt_coordinates_captured(self, x, y):
-        self.autohunt_check_x = x
-        self.autohunt_check_y = y
-        self.lbl_autohunt_values.setText(f"X: {x} , Y: {y}")
-        self.lbl_autohunt_values.setStyleSheet("color: #34d399; font-family: 'Cascadia Code'; font-size: 12px; font-weight: bold;")
-        self.lbl_anchor_val.setText("F Key — skipped if green pixel detected ON")
-        self.append_log(f"🟢 Auto Hunt pixel position saved: ({x}, {y})")
-        self.show()
-        self.save_configuration()
-
-    def clear_autohunt_coordinates(self):
-        self.autohunt_check_x = 0
-        self.autohunt_check_y = 0
-        self.lbl_autohunt_values.setText("Not Set (F key always pressed)")
-        self.lbl_autohunt_values.setStyleSheet("color: #6e6e82; font-family: 'Segoe UI'; font-size: 13px;")
-        self.lbl_anchor_val.setText("F Key (Auto-Hunt Lock) — checks pixel if set")
-        self.append_log("✕ Auto Hunt pixel position cleared. F key will always be pressed.")
-        self.show()
-        self.save_configuration()
-
-    # ── NEW: Auto Hunt pixel color detector ──
-    def is_autohunt_active(self) -> bool:
-        """
-        Returns True  → Auto Hunt is ON  (pixel is NOT dark/grey).
-        Returns False → Auto Hunt is OFF (pixel is dark/grey), or position unset, or error.
-
-        Detects the OFF state (dark button) because it is a stable, easy-to-read
-        target compared to the animated glowing green of the ON state.
-        OFF = all channels dim (all <= 80) AND no single channel strongly dominant.
-        Anything brighter/coloured is treated as ON.
-        """
-        if self.autohunt_check_x == 0 or self.autohunt_check_y == 0:
-            return False  # No position configured — always press F
-
-        try:
-            from PIL import ImageGrab
-
-            # Sample a 3×3 region and average to reduce single-pixel noise
-            bbox = (
-                self.autohunt_check_x - 1,
-                self.autohunt_check_y - 1,
-                self.autohunt_check_x + 2,
-                self.autohunt_check_y + 2,
-            )
-            img = ImageGrab.grab(bbox=bbox)
-            pixels = list(img.getdata())
-            avg_r = sum(p[0] for p in pixels) // len(pixels)
-            avg_g = sum(p[1] for p in pixels) // len(pixels)
-            avg_b = sum(p[2] for p in pixels) // len(pixels)
-
-            # OFF = dark grey button (all channels dim, no colour dominance)
-            is_off = avg_r <= 80 and avg_g <= 80 and avg_b <= 80
-
-            status = "OFF ❌" if is_off else "ON ✅"
-            self.append_log(
-                f"🔍 Auto Hunt pixel check → RGB({avg_r}, {avg_g}, {avg_b}) → {status}"
-            )
-            return not is_off  # True = active/ON, False = inactive/OFF
-
-        except Exception as e:
-            self.append_log(f"⚠️ Auto Hunt pixel check failed: {e} — defaulting to press F")
-            return False  # Safe fallback: always try to re-engage hunt
-
-    # ── Misc UI helpers ──
     def refresh_targets(self):
         devices = get_audio_devices()
         self.combo_devices.clear()
@@ -683,7 +547,7 @@ class L2MBotUI(QMainWindow):
                         left, top, right, bottom = rect
                         title_bar_height = ctypes.windll.user32.GetSystemMetrics(win32con.SM_CYCAPTION)
                         center_x = left + ((right - left) // 2)
-                        center_y = top + title_bar_height + 50
+                        center_y = top + title_bar_height + 50  
                         click_at(center_x, center_y)
                     return False
                 return True
@@ -744,22 +608,14 @@ class L2MBotUI(QMainWindow):
             payload = self.gather_macro_payload()
             auto_rec = self.chk_auto_record.isChecked()
             max_loops = self.spin_max_loops.value()
-
-            # ── Check Auto Hunt state BEFORE spawning the worker thread ──
-            autohunt_already_on = self.is_autohunt_active()
-
-            # Pass the callback only if a pixel position is configured
-            autohunt_cb = self.is_autohunt_active if (self.autohunt_check_x > 0 and self.autohunt_check_y > 0) else None
-
+            
             self.macro_worker = MacroExecutionWorker(
-                payload,
-                self.focus_target_window,
-                auto_rec,
-                self.spin_rec_duration.value(),
-                max_loops,
-                self._check_if_combat_cleared,
-                autohunt_already_on,      # skip F entirely if hunt was already ON
-                autohunt_cb               # callback for post-F confirm re-check
+                payload, 
+                self.focus_target_window, 
+                auto_rec, 
+                self.spin_rec_duration.value(), # Pass the value here
+                max_loops, 
+                self._check_if_combat_cleared
             )
             self.macro_worker.log_signal.connect(self.append_log)
             self.macro_worker.finished_signal.connect(self._on_macro_worker_finished)
@@ -773,10 +629,8 @@ class L2MBotUI(QMainWindow):
         self._is_currently_under_attack = False
 
     def toggle_engine_listening_state(self):
-        if self.is_listening:
-            self.stop_engine()
-        else:
-            self.start_engine()
+        if self.is_listening: self.stop_engine()
+        else: self.start_engine()
 
     def start_engine(self):
         triggers = ["your character is under attack"]
@@ -814,8 +668,8 @@ class L2MBotUI(QMainWindow):
                 dev_idx = dev_data.get("index", None)
                 dev_rate = dev_data.get("rate", 16000)
                 dev_channels = dev_data.get("channels", 1)
-                if dev_channels < 1:
-                    dev_channels = 1
+                if dev_channels < 1: dev_channels = 1
+
             self.append_log(f"Starting tracking framework on hardware loopback: {dev_data.get('name', 'Default Line')}")
             self.listener = AudioListener(
                 on_trigger=lambda phrase: _pushed_trigger_callback(),
@@ -839,18 +693,14 @@ class L2MBotUI(QMainWindow):
 
             self.is_listening = True
             self.btn_listen_toggle.setText("⏹ STOP LISTENING")
-            self.btn_listen_toggle.setStyleSheet(
-                "background-color: #f87171; color: white; font-weight: bold; "
-                "font-size: 14px; border-radius: 6px; padding: 12px;"
-            )
+            self.btn_listen_toggle.setStyleSheet("background-color: #f87171; color: white; font-weight: bold; font-size: 14px; border-radius: 6px; padding: 12px;")
             self.set_controls_lock(False)
         except Exception as e:
             self.append_log(f"❌ Critical error initiating stream: {e}")
             self.stop_engine()
 
     def stop_engine(self):
-        if hasattr(self, '_combat_watchdog_timer'):
-            self._combat_watchdog_timer.stop()
+        if hasattr(self, '_combat_watchdog_timer'): self._combat_watchdog_timer.stop()
         if self.hp_monitor_worker:
             self.hp_monitor_worker.stop()
             self.hp_monitor_worker = None
@@ -877,9 +727,6 @@ class L2MBotUI(QMainWindow):
         self.chk_hp_enabled.setEnabled(state)
         self.combo_hp_key.setEnabled(state)
         self.spin_max_loops.setEnabled(state)
-        # ── NEW: lock/unlock Auto Hunt controls with the rest ──
-        self.btn_pick_autohunt.setEnabled(state)
-        self.btn_clear_autohunt.setEnabled(state)
 
     def save_configuration(self):
         config = {
@@ -895,8 +742,6 @@ class L2MBotUI(QMainWindow):
             "hp_check_y": self.hp_check_y,
             "hp_enabled": self.chk_hp_enabled.isChecked(),
             "hp_key": self.combo_hp_key.currentText(),
-            "autohunt_check_x": self.autohunt_check_x,   # ← NEW
-            "autohunt_check_y": self.autohunt_check_y,   # ← NEW
             "steps": []
         }
         for step in self.macro_steps:
@@ -912,8 +757,7 @@ class L2MBotUI(QMainWindow):
 
     def load_configuration(self):
         path = get_config_path()
-        if not path.exists():
-            return
+        if not path.exists(): return
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
             self.spin_init_delay.setValue(config.get("post_init_delay", 200))
@@ -938,13 +782,6 @@ class L2MBotUI(QMainWindow):
             self.chk_hp_enabled.setChecked(config.get("hp_enabled", False))
             self.combo_hp_key.setCurrentText(config.get("hp_key", "none"))
 
-            # ── NEW: restore Auto Hunt position ──
-            self.autohunt_check_x = config.get("autohunt_check_x", 0)
-            self.autohunt_check_y = config.get("autohunt_check_y", 0)
-            if self.autohunt_check_x > 0 and self.autohunt_check_y > 0:
-                self.lbl_autohunt_values.setText(f"X: {self.autohunt_check_x} , Y: {self.autohunt_check_y}")
-                self.lbl_autohunt_values.setStyleSheet("color: #34d399; font-family: 'Cascadia Code'; font-size: 12px; font-weight: bold;")
-                self.lbl_anchor_val.setText("F Key — skipped if green pixel detected ON")
             saved_steps = config.get("steps", [])
             for idx, step_data in enumerate(saved_steps):
                 if idx < len(self.macro_steps):
