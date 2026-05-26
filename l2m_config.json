@@ -1,7 +1,7 @@
 {
   "post_init_delay": 2000,
   "max_loops": 1,
-  "auto_record": true,
+  "auto_record": false,
   "record_duration": 20,
   "power_saver": false,
   "audio_source_idx": 1,
@@ -9,8 +9,10 @@
   "focus_click_y": 353,
   "hp_check_x": 2914,
   "hp_check_y": 52,
-  "hp_enabled": true,
+  "hp_enabled": false,
   "hp_key": "0",
+  "autohunt_check_x": 3493,
+  "autohunt_check_y": 658,
   "steps": [
     {
       "enabled": true,
